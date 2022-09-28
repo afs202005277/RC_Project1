@@ -21,6 +21,12 @@
 
 #define BUF_SIZE 256
 
+#define FLAG 0x7E
+#define COMMAND_SENDER 0x03
+#define COMMAND_RECEIVER 0x01
+#define SET 0x03
+#define UA 0x07
+
 volatile int STOP = FALSE;
 
 int main(int argc, char *argv[])
@@ -94,7 +100,7 @@ int main(int argc, char *argv[])
     int bytes = 0;
     int total_bytes = 0;
 
-    while (STOP == FALSE)
+    /**while (STOP == FALSE)
     {
         bytes = read(fd, buf + bytes, BUF_SIZE - bytes);
         total_bytes += bytes;
@@ -106,8 +112,35 @@ int main(int argc, char *argv[])
             STOP = TRUE;
             write(fd, buf, strlen(buf)+1);
         }
-    }
+    }**/
+    unsigned char byte = 0, i =0;
+    unsigned char flagsReceived = 0;
+    unsigned char trama[5];
+    do {
+        read(fd, &byte, 1);
+        if (byte == FLAG)
+            flagsReceived++;
+        trama[i] = byte;
+        i++;
+    } while(flagsReceived < 2);
 
+    unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
+    unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
+
+    unsigned char equal = 1;
+    for (int i = 0; i < 5; i++)
+    {
+        if (trama[i] != setUp[i])
+        {
+            equal = 0;
+            break;
+        }
+    }
+    if (equal == 0){
+        printf("Wrong setUp\n");
+    }
+        
+    write(fd, uaReceive, 5);
     // The while() cycle should be changed in order to respect the specifications
     // of the protocol indicated in the Lab guide
 

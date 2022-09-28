@@ -23,6 +23,12 @@
 
 volatile int STOP = FALSE;
 
+#define FLAG 0x7E
+#define COMMAND_SENDER 0x03
+#define COMMAND_RECEIVER 0x01
+#define SET 0x03
+#define UA 0x07
+
 int main(int argc, char *argv[])
 {
     // Program usage: Uses either COM1 or COM2
@@ -92,25 +98,48 @@ int main(int argc, char *argv[])
     // Create string to send
     unsigned char buf[BUF_SIZE] = {0};
 
-    gets(buf);
-    
+    // gets(buf);
+
     unsigned int length = strlen(buf);
 
     // In non-canonical mode, '\n' does not end the writing.
     // Test this condition by placing a '\n' in the middle of the buffer.
     // The whole buffer must be sent even with the '\n'.
-    //buf[5] = '\n';
+    // buf[5] = '\n';
 
-    int bytes = write(fd, buf, length+1);
-    printf("%d bytes written\n", length+1);
+    unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
+    unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
+    int bytes = write(fd, setUp, 5);
+    printf("%d bytes written\n", 5);
 
     // Wait until all bytes have been written to the serial port
     sleep(1);
 
     buf[0] = '\0';
     read(fd, buf, BUF_SIZE);
-    printf("%s\n", buf);
+    // printf("%s\n", buf);
 
+    unsigned char equal = 1;
+    for (int i = 0; i < 5; i++)
+    {
+        if (buf[i] != uaReceive[i])
+        {
+            equal = 0;
+            break;
+        }
+    }
+    // printf("Received UA but it was wrong.\n");
+    printf("Received: ");
+    for (int i = 0; i < 5; i++)
+    {
+        printf("%x", buf[i]);
+    }
+    printf("\nExpected: ");
+    for (int i = 0; i < 5; i++)
+    {
+        printf("%x", uaReceive[i]);
+    }
+    printf("\n");
     // Restore the old port settings
     if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
     {
