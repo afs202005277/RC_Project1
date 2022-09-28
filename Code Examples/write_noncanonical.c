@@ -33,14 +33,15 @@ volatile int STOP = FALSE;
 #define SIZE_COMMAND_WEBS 5
 #define MAX_REPEAT 3
 unsigned char alarmTriggered = FALSE;
+unsigned char attempts = 0;
 
 void alarmHandler(int num)
 {
     alarmTriggered = TRUE;
-    printf("ALARM\n");
+    printf("Attempt #%d failed!\n", attempts);
 }
 
-int flag_check(unsigned char *v1, unsigned char *v2, unsigned int numBytes)
+int flagCheck(unsigned char *v1, unsigned char *v2, unsigned int numBytes)
 {
     unsigned char equal = TRUE;
     for (int i = 0; i < numBytes; i++)
@@ -67,6 +68,37 @@ int flag_check(unsigned char *v1, unsigned char *v2, unsigned int numBytes)
         printf("\n");
     }
     return equal;
+}
+
+int makeConnection(int fd){
+    unsigned char buf[BUF_SIZE] = {0};
+    unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
+    unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
+    if (write(fd, setUp, SIZE_COMMAND_WEBS) == -1)
+    {
+        perror("Couldn't write to the serial port: ");
+    }
+    while (attempts < MAX_REPEAT)
+    {
+        attempts++;
+        if (alarmTriggered == TRUE)
+            if (write(fd, setUp, SIZE_COMMAND_WEBS) == -1)
+            {
+                perror("Couldn't write to the serial port: ");
+            }
+        alarm(3);
+
+        int bytesRead = read(fd, buf, BUF_SIZE);
+        if (bytesRead > 0 && flagCheck(buf, uaReceive, SIZE_COMMAND_WEBS) == TRUE)
+        {
+            printf("Logical connection established successfully!\n");
+            alarm(0);
+            break;
+        }
+    }
+    if (attempts == MAX_REPEAT)
+        printf("Giving up...\n");
+    return attempts;
 }
 
 int main(int argc, char *argv[])
@@ -135,35 +167,10 @@ int main(int argc, char *argv[])
 
     printf("New termios structure set\n");
 
-    unsigned char buf[BUF_SIZE] = {0};
     (void)signal(SIGALRM, alarmHandler);
-    unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
-    unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
-    unsigned char max_repeat = MAX_REPEAT;
-    if (write(fd, setUp, SIZE_COMMAND_WEBS) == -1)
-    {
-        perror("Couldn't write to the serial port: ");
-    }
-    while (max_repeat > 0)
-    {
-        if (alarmTriggered == TRUE)
-            if (write(fd, setUp, SIZE_COMMAND_WEBS) == -1)
-            {
-                perror("Couldn't write to the serial port: ");
-            }
-        alarm(3);
 
-        int bytesRead = read(fd, buf, BUF_SIZE);
-        max_repeat--;
-        if (bytesRead > 0 && flag_check(buf, uaReceive, SIZE_COMMAND_WEBS) == TRUE)
-        {
-            printf("Logical connection established successfully!\n");
-            alarm(0);
-            break;
-        }
-    }
-    if (max_repeat == 0)
-        printf("Timeout too many times! Giving up...\n");
+    makeConnection(fd);
+
     // Restore the old port settings
     if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
     {
