@@ -27,7 +27,35 @@
 #define SET 0x03
 #define UA 0x07
 
+#define SIZE_COMMAND_WEBS 5
 volatile int STOP = FALSE;
+
+int readPackage(int fd, unsigned char* buffer){
+    unsigned char byte = 0, idx =0;
+    unsigned char flagsReceived = 0;
+    do {
+        read(fd, &byte, 1);
+        if (byte == FLAG)
+            flagsReceived++;
+        buffer[idx] = byte;
+        idx++;
+    } while(flagsReceived < 2);
+    return idx;
+}
+
+int isSetUp(unsigned char* buf){
+    unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
+    unsigned char equal = TRUE;
+    for (int i = 0; i < SIZE_COMMAND_WEBS; i++)
+    {
+        if (buf[i] != setUp[i])
+        {
+            equal = FALSE;
+            break;
+        }
+    }
+    return equal;
+}
 
 int main(int argc, char *argv[])
 {
@@ -95,55 +123,15 @@ int main(int argc, char *argv[])
     printf("New termios structure set\n");
 
     // Loop for input
-    unsigned char buf[BUF_SIZE + 1] = {0}; // +1: Save space for the final '\0' char
+    unsigned char buf[BUF_SIZE] = {0};
 
-    int bytes = 0;
-    int total_bytes = 0;
+    int bytesRead = readPackage(fd, buf);
 
-    /**while (STOP == FALSE)
-    {
-        bytes = read(fd, buf + bytes, BUF_SIZE - bytes);
-        total_bytes += bytes;
-
-        printf(":%s:%d\n", buf, total_bytes);
-        //if (buf[strlen(buf) - 1] == '\0')
-            //STOP = TRUE;
-        if (buf[strlen(buf)] == '\0'){
-            STOP = TRUE;
-            write(fd, buf, strlen(buf)+1);
-        }
-    }**/
-    unsigned char byte = 0, i =0;
-    unsigned char flagsReceived = 0;
-    unsigned char trama[5];
-    do {
-        read(fd, &byte, 1);
-        if (byte == FLAG)
-            flagsReceived++;
-        trama[i] = byte;
-        i++;
-    } while(flagsReceived < 2);
-
-    unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
-    unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
-
-    unsigned char equal = 1;
-    for (int i = 0; i < 5; i++)
-    {
-        if (trama[i] != setUp[i])
-        {
-            equal = 0;
-            break;
-        }
-    }
-    if (equal == 0){
-        printf("Wrong setUp\n");
+    if (bytesRead == SIZE_COMMAND_WEBS && isSetUp(buf) == TRUE){
+        unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
+        write(fd, uaReceive, SIZE_COMMAND_WEBS);
     }
         
-    write(fd, uaReceive, 5);
-    // The while() cycle should be changed in order to respect the specifications
-    // of the protocol indicated in the Lab guide
-
     // Restore the old port settings
     if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
     {

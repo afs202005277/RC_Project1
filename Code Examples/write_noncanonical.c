@@ -70,6 +70,20 @@ int flagCheck(unsigned char *v1, unsigned char *v2, unsigned int numBytes)
     return equal;
 }
 
+int readPackage(int fd, unsigned char* buffer){
+    unsigned char byte = 0, idx =0;
+    unsigned char flagsReceived = 0;
+    do {
+        if (read(fd, &byte, 1) == 0)
+            break;
+        if (byte == FLAG)
+            flagsReceived++;
+        buffer[idx] = byte;
+        idx++;
+    } while(flagsReceived < 2);
+    return idx;
+}
+
 int makeConnection(int fd){
     unsigned char buf[BUF_SIZE] = {0};
     unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
@@ -88,16 +102,15 @@ int makeConnection(int fd){
             }
         alarm(3);
 
-        int bytesRead = read(fd, buf, BUF_SIZE);
+        int bytesRead = readPackage(fd, buf);
         if (bytesRead > 0 && flagCheck(buf, uaReceive, SIZE_COMMAND_WEBS) == TRUE)
         {
             printf("Logical connection established successfully!\n");
             alarm(0);
-            break;
+            return attempts;
         }
     }
-    if (attempts == MAX_REPEAT)
-        printf("Giving up...\n");
+    printf("Giving up...\n");
     return attempts;
 }
 
