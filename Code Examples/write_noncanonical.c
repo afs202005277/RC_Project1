@@ -30,6 +30,7 @@ volatile int STOP = FALSE;
 #define SET 0x03
 #define UA 0x07
 
+#define SIZE_COMMAND_WEBS 5
 #define MAX_REPEAT 3
 unsigned char alarmTriggered = FALSE;
 
@@ -39,9 +40,37 @@ void alarmHandler(int num)
     printf("ALARM\n");
 }
 
+int flag_check(unsigned char *v1, unsigned char *v2, unsigned int numBytes)
+{
+    unsigned char equal = TRUE;
+    for (int i = 0; i < numBytes; i++)
+    {
+        if (v1[i] != v2[i])
+        {
+            equal = FALSE;
+            break;
+        }
+    }
+    if (equal == FALSE)
+    {
+        printf("Received UA but it was wrong.\n");
+        printf("Received: ");
+        for (int i = 0; i < numBytes; i++)
+        {
+            printf("%x", v1[i]);
+        }
+        printf("\nExpected: ");
+        for (int i = 0; i < numBytes; i++)
+        {
+            printf("%x", v2[i]);
+        }
+        printf("\n");
+    }
+    return equal;
+}
+
 int main(int argc, char *argv[])
 {
-    unsigned char max_repeat = MAX_REPEAT;
     // Program usage: Uses either COM1 or COM2
     const char *serialPortName = argv[1];
 
@@ -85,7 +114,7 @@ int main(int argc, char *argv[])
     // Set input mode (non-canonical, no echo,...)
     newtio.c_lflag = 0;
     newtio.c_cc[VTIME] = 30; // Inter-character timer unused
-    newtio.c_cc[VMIN] = 0;  // Blocking read until 5 chars received
+    newtio.c_cc[VMIN] = 0;   // Blocking read until 5 chars received
 
     // VTIME e VMIN should be changed in order to protect with a
     // timeout the reception of the following character(s)
@@ -106,66 +135,35 @@ int main(int argc, char *argv[])
 
     printf("New termios structure set\n");
 
-    // Create string to send
     unsigned char buf[BUF_SIZE] = {0};
-
-    // gets(buf);
-
-    unsigned int length = strlen(buf);
-
-    // In non-canonical mode, '\n' does not end the writing.
-    // Test this condition by placing a '\n' in the middle of the buffer.
-    // The whole buffer must be sent even with the '\n'.
-    // buf[5] = '\n';
-
     (void)signal(SIGALRM, alarmHandler);
-
     unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
     unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
-    write(fd, setUp, 5);
+    unsigned char max_repeat = MAX_REPEAT;
+    if (write(fd, setUp, SIZE_COMMAND_WEBS) == -1)
+    {
+        perror("Couldn't write to the serial port: ");
+    }
     while (max_repeat > 0)
     {
-        int bytes = 0;
         if (alarmTriggered == TRUE)
-            bytes = write(fd, setUp, 5);
-        printf("%d bytes written\n", 5);
-
+            if (write(fd, setUp, SIZE_COMMAND_WEBS) == -1)
+            {
+                perror("Couldn't write to the serial port: ");
+            }
         alarm(3);
 
         int bytesRead = read(fd, buf, BUF_SIZE);
         max_repeat--;
-        // printf("%s\n", buf);
-        if (bytesRead > 0)
+        if (bytesRead > 0 && flag_check(buf, uaReceive, SIZE_COMMAND_WEBS) == TRUE)
         {
-            unsigned char equal = TRUE;
-            for (int i = 0; i < 5; i++)
-            {
-                if (buf[i] != uaReceive[i])
-                {
-                    equal = FALSE;
-                    break;
-                }
-            }
-            if (equal == TRUE)
-            {
-                printf("Equal\n");
-                alarm(0);
-                break;
-            }
-            // printf("Received UA but it was wrong.\n");
-            printf("Received: ");
-            for (int i = 0; i < 5; i++)
-            {
-                printf("%x", buf[i]);
-            }
-            printf("\nExpected: ");
-            for (int i = 0; i < 5; i++)
-            {
-                printf("%x", uaReceive[i]);
-            }
-            printf("\n");
+            printf("Logical connection established successfully!\n");
+            alarm(0);
+            break;
         }
     }
+    if (max_repeat == 0)
+        printf("Timeout too many times! Giving up...\n");
     // Restore the old port settings
     if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
     {
