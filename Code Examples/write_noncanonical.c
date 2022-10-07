@@ -22,8 +22,6 @@
 
 #define BUF_SIZE 256
 
-volatile int STOP = FALSE;
-
 #define FLAG 0x7E
 #define COMMAND_SENDER 0x03
 #define COMMAND_RECEIVER 0x01
@@ -32,6 +30,19 @@ volatile int STOP = FALSE;
 
 #define SIZE_COMMAND_WEBS 5
 #define MAX_REPEAT 3
+
+enum State
+{
+    START,
+    FLAG_RCV,
+    A_RCV,
+    C_RCV,
+    BCC_OK,
+    STOP
+};
+
+enum State state = START;
+
 unsigned char alarmTriggered = FALSE;
 unsigned char attempts = 0;
 
@@ -70,24 +81,81 @@ int flagCheck(unsigned char *v1, unsigned char *v2, unsigned int numBytes)
     return equal;
 }
 
-int readPackage(int fd, unsigned char* buffer){
-    unsigned char byte = 0, idx =0;
-    unsigned char flagsReceived = 0;
-    do {
+void readPackage(int fd, unsigned char *buffer)
+{
+    unsigned char byte = 0;
+    do
+    {
         if (read(fd, &byte, 1) == 0)
             break;
-        if (byte == FLAG)
-            flagsReceived++;
-        buffer[idx] = byte;
-        idx++;
-    } while(flagsReceived < 2);
-    return idx;
+        switch (state)
+        {
+        case START:
+            if (byte == FLAG)
+            {
+                state = FLAG_RCV;
+            }
+            break;
+        case FLAG_RCV:
+            if (byte == COMMAND_SENDER)
+            {
+                state = A_RCV;
+            }
+            else if (byte != FLAG)
+            {
+                state = START;
+            }
+            break;
+        case A_RCV:
+            if (byte == UA)
+            {
+                state = C_RCV;
+            }
+            else if (byte == FLAG)
+            {
+                state = FLAG_RCV;
+            }
+            else
+            {
+                state = START;
+            }
+            break;
+        case C_RCV:
+            if (byte == FLAG)
+            {
+                state = FLAG_RCV;
+            }
+            else if ((COMMAND_SENDER ^ UA) == byte)
+            {
+                state = BCC_OK;
+            }
+            else
+            {
+                state = START;
+            }
+            break;
+        case BCC_OK:
+            if (byte == FLAG)
+            {
+                state = STOP;
+            }
+            else
+            {
+                state = START;
+            }
+            break;
+        default:
+            break;
+        }
+
+    } while (state != STOP);
 }
 
-int makeConnection(int fd){
+int makeConnection(int fd)
+{
     unsigned char buf[BUF_SIZE] = {0};
     unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
-    unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
+    // unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
     if (write(fd, setUp, SIZE_COMMAND_WEBS) == -1)
     {
         perror("Couldn't write to the serial port: ");
@@ -102,8 +170,8 @@ int makeConnection(int fd){
             }
         alarm(3);
 
-        int bytesRead = readPackage(fd, buf);
-        if (bytesRead > 0 && flagCheck(buf, uaReceive, SIZE_COMMAND_WEBS) == TRUE)
+        readPackage(fd, buf);
+        if (state == STOP)
         {
             printf("Logical connection established successfully!\n");
             alarm(0);
