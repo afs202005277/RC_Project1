@@ -28,33 +28,83 @@
 #define UA 0x07
 
 #define SIZE_COMMAND_WEBS 5
-volatile int STOP = FALSE;
+enum State
+{
+    START,
+    FLAG_RCV,
+    A_RCV,
+    C_RCV,
+    BCC_OK,
+    STOP
+};
 
-int readPackage(int fd, unsigned char* buffer){
-    unsigned char byte = 0, idx =0;
-    unsigned char flagsReceived = 0;
-    do {
-        read(fd, &byte, 1);
-        if (byte == FLAG)
-            flagsReceived++;
-        buffer[idx] = byte;
-        idx++;
-    } while(flagsReceived < 2);
-    return idx;
-}
+enum State state = START;
 
-int isSetUp(unsigned char* buf){
-    unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
-    unsigned char equal = TRUE;
-    for (int i = 0; i < SIZE_COMMAND_WEBS; i++)
+void readPackage(int fd, unsigned char* buffer){
+    unsigned char byte = 0;
+    do
     {
-        if (buf[i] != setUp[i])
+        switch (state)
         {
-            equal = FALSE;
+        case START:
+            if (byte == FLAG)
+            {
+                state = FLAG_RCV;
+            }
+            break;
+        case FLAG_RCV:
+            if (byte == COMMAND_SENDER)
+            {
+                state = A_RCV;
+            }
+            else if (byte != FLAG)
+            {
+                state = START;
+            }
+            break;
+        case A_RCV:
+            if (byte == SET)
+            {
+                state = C_RCV;
+            }
+            else if (byte == FLAG)
+            {
+                state = FLAG_RCV;
+            }
+            else
+            {
+                state = START;
+            }
+            break;
+        case C_RCV:
+            if (byte == FLAG)
+            {
+                state = FLAG_RCV;
+            }
+            else if ((COMMAND_SENDER ^ SET) == byte)
+            {
+                state = BCC_OK;
+            }
+            else
+            {
+                state = START;
+            }
+            break;
+        case BCC_OK:
+            if (byte == FLAG)
+            {
+                state = STOP;
+            }
+            else
+            {
+                state = START;
+            }
+            break;
+        default:
             break;
         }
-    }
-    return equal;
+
+    } while (state != STOP);
 }
 
 int main(int argc, char *argv[])
@@ -125,9 +175,9 @@ int main(int argc, char *argv[])
     // Loop for input
     unsigned char buf[BUF_SIZE] = {0};
 
-    int bytesRead = readPackage(fd, buf);
+    readPackage(fd, buf);
 
-    if (bytesRead == SIZE_COMMAND_WEBS && isSetUp(buf) == TRUE){
+    if (state == STOP){
         unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
         write(fd, uaReceive, SIZE_COMMAND_WEBS);
     }
