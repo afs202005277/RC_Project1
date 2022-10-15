@@ -49,7 +49,8 @@ enum Next_Step
     SEND_DATA_1,
     SEND_RR_0,
     SEND_RR_1,
-    SEND_DISC
+    SEND_DISC,
+    DO_NOTHING
 };
 
 enum State
@@ -252,6 +253,7 @@ int llwrite(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llread(unsigned char *packet)
 {
+    next_step = DO_NOTHING;
     packet = malloc(MAX_BYTES * sizeof(unsigned char));
     unsigned int idx = 0;
     unsigned char byte = 0;
@@ -400,8 +402,12 @@ int llread(unsigned char *packet)
 ////////////////////////////////////////////////
 int llclose(int showStatistics)
 {
-    // mandar disc
-    close(fd);
-
-    return 1;
+    unsigned char buf[] = {DISC};
+    llwrite(buf, 1);
+    if (next_step == SEND_UA){
+        buf[0] = UA;
+        llwrite(buf, 1);
+        return 1;
+    }
+    return -1;
 }
