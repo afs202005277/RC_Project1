@@ -41,9 +41,12 @@ enum State
 enum State state = START;
 
 void readPackage(int fd, unsigned char* buffer){
+    
     unsigned char byte = 0;
     do
     {
+        read(fd, &byte, 1);
+        printf("%x\n", byte);
         switch (state)
         {
         case START:
