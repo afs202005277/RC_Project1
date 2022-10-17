@@ -8,6 +8,7 @@
 */
 
 #include "link_layer.h"
+#include "tmp.h"
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -98,7 +99,7 @@ int makeConnection()
 // LLOPEN
 ////////////////////////////////////////////////
 int llopen(LinkLayer connectionParameters)
-{   
+{
     fd = open(connectionParameters.serialPort, O_RDWR | O_NOCTTY);
     printf("fd: %d\n", fd);
 
@@ -151,11 +152,18 @@ int llopen(LinkLayer connectionParameters)
         (void)signal(SIGALRM, alarmHandler);
         if (makeConnection() == -1)
             return -1;
-    } else {
-        unsigned char* packet=NULL;
+    }
+    else
+    {
+        unsigned char *packet = NULL;
         llread(packet);
-        if (state == SUCCESS){
-            connection_state = DATA_TRANSFER;
+        if (state == SUCCESS)
+        {
+            if (handleNextStep(NULL, 0) == 0)
+            {
+                connection_state = DATA_TRANSFER;
+                printf("Logical connection established successfully!\n");
+            }
         }
     }
 
@@ -215,11 +223,80 @@ unsigned char bcc2(const unsigned char *buf, int bufSize)
     return result;
 }
 
+// falta completar o disc (são precisas 3 mensagens)
+int handleNextStep(const unsigned char *buf, int bufSize)
+{
+    int res = 0;
+    switch (next_step)
+    {
+    case SEND_UA:
+        unsigned char uaReceive[] = {FLAG, COMMAND_SENDER, UA, COMMAND_SENDER ^ UA, FLAG};
+        res = llwrite(uaReceive, 5);
+        break;
+    case SEND_DATA_0:
+    case SEND_DATA_1:
+        res = sendInformationFrame(buf, bufSize);
+        break;
+    case SEND_RR_0:
+        unsigned char rr0[] = {FLAG, COMMAND_SENDER, RR_0, COMMAND_SENDER ^ RR_0, FLAG};
+        res = llwrite(rr0, 5);
+        break;
+    case SEND_RR_1:
+        unsigned char rr1[] = {FLAG, COMMAND_SENDER, RR_1, COMMAND_SENDER ^ RR_1, FLAG};
+        res = llwrite(rr1, 5);
+        break;
+    case SEND_DISC:
+        unsigned char disc[] = {FLAG, COMMAND_SENDER, DISC, COMMAND_SENDER ^ DISC, FLAG};
+        res = llwrite(disc, 5);
+        break;
+    default:
+        res = 0;
+    }
+    printf("ola\n");
+    return res;
+}
+
 ////////////////////////////////////////////////
 // LLWRITE
 ////////////////////////////////////////////////
-void printBuffer(const unsigned char* buf, int bufsize){
-    for (int i=0;i<bufsize;i++){
+
+int sendInformationFrame(const unsigned char *buf, int bufsize)
+{
+    unsigned char *stuffed = NULL;
+    int stuffedSize = 0;
+    stuffing(buf, bufsize, stuffed, &stuffedSize);
+    printf("1\n");
+    unsigned char *frame = (unsigned char*) malloc((stuffedSize + 6) * sizeof(unsigned char));
+    frame[0] = FLAG;
+    frame[1] = COMMAND_SENDER;
+    printf("ss: %d\n", stuffedSize + 6);
+    if (next_step == SEND_DATA_0)
+    {
+        frame[2] = 0x00;
+    }
+    else if (next_step == SEND_DATA_1)
+    {
+        frame[2] = 0x40;
+    }
+    frame[3] = COMMAND_SENDER ^ frame[2];
+    printf("ss: %d\n", stuffedSize);
+    for (int i = 0; i < stuffedSize; i++)
+    {
+        printf("idx: %d\n", 4+i);
+        frame[4 + i] = stuffed[i];
+    }
+    printf("3\n");
+    frame[4 + stuffedSize] = bcc2(buf, bufsize);
+    printf("4\n");
+    frame[4 + stuffedSize + 1] = FLAG;
+    printf("5\n");
+    return llwrite(frame, stuffedSize + 6);
+}
+
+void printBuffer(const unsigned char *buf, int bufsize)
+{
+    for (int i = 0; i < bufsize; i++)
+    {
         printf("%x", buf[i]);
     }
     printf("\n");
@@ -227,7 +304,7 @@ void printBuffer(const unsigned char* buf, int bufsize){
 
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    unsigned char* answer = NULL;
+    unsigned char *answer = NULL;
     attempts = 0;
     if (write(fd, buf, bufSize) < 0)
     {
@@ -235,6 +312,7 @@ int llwrite(const unsigned char *buf, int bufSize)
         printf("bufSize: %d\nbuf: ", bufSize);
         printBuffer(buf, bufSize);
         perror("Couldn't write to the serial port: ");
+        return -1;
     }
     if (role == LlTx)
     {
@@ -249,16 +327,20 @@ int llwrite(const unsigned char *buf, int bufSize)
                     perror("Couldn't write to the serial port: ");
                 }
             }
-            llread(answer);
-            if (state == SUCCESS)
+            if (role == LlTx)
             {
-                if (connection_state == ESTABLISHMENT)
+                llread(answer);
+                handleNextStep(buf, bufSize);
+                if (state == SUCCESS)
                 {
-                    connection_state = DATA_TRANSFER;
-                    printf("Logical connection established successfully!\n");
+                    if (connection_state == ESTABLISHMENT)
+                    {
+                        connection_state = DATA_TRANSFER;
+                        printf("Logical connection established successfully!\n");
+                    }
+                    alarm(0);
+                    return bufSize;
                 }
-                alarm(0);
-                return bufSize;
             }
         }
         printf("Giving up...\n");
@@ -280,6 +362,10 @@ int llread(unsigned char *packet)
     {
         if (read(fd, &byte, 1) == 0)
             break;
+        printf("%x\n", byte);
+        printf("State: %d\n", state);
+        printf("Connection state: %d\n", connection_state);
+        printf("-------------------\n");
         switch (state)
         {
         case START:
@@ -307,7 +393,7 @@ int llread(unsigned char *packet)
             if (role == LlTx && byte == UA)
             {
                 state = C_RCV;
-                next_step = SEND_DATA_0;
+                next_step = DO_NOTHING;
             }
             else if (role == LlRx && byte == SET)
             {
@@ -387,7 +473,7 @@ int llread(unsigned char *packet)
                     state = SUCCESS;
                 else if (packet[idx - 1] != ESCAPE)
                 {
-                    unsigned char *unstuffed_data=NULL;
+                    unsigned char *unstuffed_data = NULL;
                     int size;
                     unstuff(packet, idx - 1, unstuffed_data, &size);
                     if (idx != 0 && packet[idx - 1] == bcc2(unstuffed_data, size))
@@ -413,6 +499,7 @@ int llread(unsigned char *packet)
         }
 
     } while (state != SUCCESS);
+    printf("%d\n", state);
     return 0;
 }
 
@@ -423,7 +510,8 @@ int llclose(int showStatistics)
 {
     unsigned char buf[] = {DISC};
     llwrite(buf, 1);
-    if (next_step == SEND_UA){
+    if (next_step == SEND_UA)
+    {
         buf[0] = UA;
         llwrite(buf, 1);
         return 1;
