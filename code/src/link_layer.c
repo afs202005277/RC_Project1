@@ -40,7 +40,7 @@
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
-static int fd = -1;
+static int fd = 0;
 
 enum Next_Step
 {
@@ -89,17 +89,18 @@ void alarmHandler(int num)
 
 int makeConnection()
 {
-    unsigned char setUp = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
+    unsigned char setUp[] = {FLAG, COMMAND_SENDER, SET, COMMAND_SENDER ^ SET, FLAG};
 
-    llwrite(setUp, 5);
+    return llwrite(setUp, 5);
 }
 
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
 int llopen(LinkLayer connectionParameters)
-{
+{   
     fd = open(connectionParameters.serialPort, O_RDWR | O_NOCTTY);
+    printf("fd: %d\n", fd);
 
     if (fd < 0)
     {
@@ -148,7 +149,14 @@ int llopen(LinkLayer connectionParameters)
     if (connectionParameters.role == LlTx)
     {
         (void)signal(SIGALRM, alarmHandler);
-        makeConnection();
+        if (makeConnection() == -1)
+            return -1;
+    } else {
+        unsigned char* packet=NULL;
+        llread(packet);
+        if (state == SUCCESS){
+            connection_state = DATA_TRANSFER;
+        }
     }
 
     if (tcsetattr(fd, TCSANOW, &oldtio) == -1)
@@ -210,11 +218,22 @@ unsigned char bcc2(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 // LLWRITE
 ////////////////////////////////////////////////
+void printBuffer(const unsigned char* buf, int bufsize){
+    for (int i=0;i<bufsize;i++){
+        printf("%x", buf[i]);
+    }
+    printf("\n");
+}
+
 int llwrite(const unsigned char *buf, int bufSize)
 {
+    unsigned char* answer = NULL;
     attempts = 0;
-    if (write(fd, buf, bufSize) != bufSize)
+    if (write(fd, buf, bufSize) < 0)
     {
+        printf("fd: %d\n", fd);
+        printf("bufSize: %d\nbuf: ", bufSize);
+        printBuffer(buf, bufSize);
         perror("Couldn't write to the serial port: ");
     }
     if (role == LlTx)
@@ -230,7 +249,7 @@ int llwrite(const unsigned char *buf, int bufSize)
                     perror("Couldn't write to the serial port: ");
                 }
             }
-            llread(buf);
+            llread(answer);
             if (state == SUCCESS)
             {
                 if (connection_state == ESTABLISHMENT)
@@ -351,7 +370,7 @@ int llread(unsigned char *packet)
             {
                 state = BCC_OK;
             }
-            else if (byte == COMMAND_RECEIVER ^ DISC && role == LlTx && connection_state == TERMINATION)
+            else if (byte == (COMMAND_RECEIVER ^ DISC) && role == LlTx && connection_state == TERMINATION)
             {
                 state = BCC_OK;
                 next_step = SEND_UA;
@@ -368,7 +387,7 @@ int llread(unsigned char *packet)
                     state = SUCCESS;
                 else if (packet[idx - 1] != ESCAPE)
                 {
-                    unsigned char *unstuffed_data;
+                    unsigned char *unstuffed_data=NULL;
                     int size;
                     unstuff(packet, idx - 1, unstuffed_data, &size);
                     if (idx != 0 && packet[idx - 1] == bcc2(unstuffed_data, size))
