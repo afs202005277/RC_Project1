@@ -35,10 +35,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             exit(-1);
         }
         int file = open(filename, O_RDONLY);
-        // unsigned char buffer[MAX_PAYLOAD_SIZE];
-        //unsigned int read_bytes = read(file, buffer, MAX_PAYLOAD_SIZE);
-        unsigned char buffer[] = {0x7D, 0x7e, 0x41};
-        unsigned int read_bytes = 3;
+        unsigned char buffer[MAX_PAYLOAD_SIZE];
+        unsigned int read_bytes = read(file, buffer, MAX_PAYLOAD_SIZE);
         sendInformationFrame(buffer, read_bytes);
         /*while ((read_bytes = read(file, buffer, MAX_PAYLOAD_SIZE)) > 0)
         {
