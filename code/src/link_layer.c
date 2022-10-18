@@ -172,13 +172,13 @@ int llopen(LinkLayer connectionParameters)
         perror("tcsetattr");
         exit(-1);
     }
-
+    printf("%d\n", connection_state);
     return 0;
 }
 
-void stuffing(const unsigned char *buf, int bufSize, unsigned char *stuffed, int *stuffedSize)
+unsigned char *stuffing(const unsigned char *buf, int bufSize, int *stuffedSize)
 {
-    stuffed = malloc(2 * bufSize * sizeof(unsigned char));
+    unsigned char *stuffed = malloc(2 * bufSize * sizeof(unsigned char));
     int stuf_idx = 0;
     for (int i = 0; i < bufSize; i++)
     {
@@ -191,11 +191,12 @@ void stuffing(const unsigned char *buf, int bufSize, unsigned char *stuffed, int
         stuf_idx++;
     }
     *stuffedSize = stuf_idx;
+    return stuffed;
 }
 
-void unstuff(const unsigned char *buf, int bufSize, unsigned char *unstuffed, int *unstuffedSize)
+unsigned char *unstuff(const unsigned char *buf, int bufSize, int *unstuffedSize)
 {
-    unstuffed = malloc(bufSize * sizeof(unsigned char));
+    unsigned char *unstuffed = malloc(bufSize * sizeof(unsigned char));
     int unstuf_idx = 0;
     for (int i = 0; i < bufSize - 1; i++)
     {
@@ -211,6 +212,7 @@ void unstuff(const unsigned char *buf, int bufSize, unsigned char *unstuffed, in
         unstuf_idx++;
     }
     *unstuffedSize = unstuf_idx;
+    return unstuffed;
 }
 
 unsigned char bcc2(const unsigned char *buf, int bufSize)
@@ -252,8 +254,10 @@ int handleNextStep(const unsigned char *buf, int bufSize)
     default:
         res = 0;
     }
-    printf("ola\n");
-    return res;
+    if (res >= 0)
+        return 0;
+    else
+        return -1;
 }
 
 ////////////////////////////////////////////////
@@ -262,14 +266,11 @@ int handleNextStep(const unsigned char *buf, int bufSize)
 
 int sendInformationFrame(const unsigned char *buf, int bufsize)
 {
-    unsigned char *stuffed = NULL;
     int stuffedSize = 0;
-    stuffing(buf, bufsize, stuffed, &stuffedSize);
-    printf("1\n");
-    unsigned char *frame = (unsigned char*) malloc((stuffedSize + 6) * sizeof(unsigned char));
+    unsigned char *stuffed = stuffing(buf, bufsize, &stuffedSize);
+    unsigned char *frame = malloc(stuffedSize + 6);
     frame[0] = FLAG;
     frame[1] = COMMAND_SENDER;
-    printf("ss: %d\n", stuffedSize + 6);
     if (next_step == SEND_DATA_0)
     {
         frame[2] = 0x00;
@@ -279,17 +280,13 @@ int sendInformationFrame(const unsigned char *buf, int bufsize)
         frame[2] = 0x40;
     }
     frame[3] = COMMAND_SENDER ^ frame[2];
-    printf("ss: %d\n", stuffedSize);
     for (int i = 0; i < stuffedSize; i++)
     {
-        printf("idx: %d\n", 4+i);
         frame[4 + i] = stuffed[i];
     }
-    printf("3\n");
     frame[4 + stuffedSize] = bcc2(buf, bufsize);
-    printf("4\n");
     frame[4 + stuffedSize + 1] = FLAG;
-    printf("5\n");
+    printf("%d\n", stuffedSize+6);
     return llwrite(frame, stuffedSize + 6);
 }
 
@@ -297,7 +294,7 @@ void printBuffer(const unsigned char *buf, int bufsize)
 {
     for (int i = 0; i < bufsize; i++)
     {
-        printf("%x", buf[i]);
+        printf("%x ", buf[i]);
     }
     printf("\n");
 }
@@ -314,14 +311,18 @@ int llwrite(const unsigned char *buf, int bufSize)
         perror("Couldn't write to the serial port: ");
         return -1;
     }
-    if (role == LlTx)
+    /*if (role == LlTx)
     {
-        alarm(timeout);
+        printBuffer(buf, bufSize);
         while (attempts < maxRepeat)
         {
+            printf("%d\n", attempts);
+            alarm(timeout);
+            printf("SENDING\n");
             attempts++;
             if (alarmTriggered == TRUE)
             {
+                printf("SENDING\n");
                 if (write(fd, buf, bufSize) != bufSize)
                 {
                     perror("Couldn't write to the serial port: ");
@@ -345,27 +346,38 @@ int llwrite(const unsigned char *buf, int bufSize)
         }
         printf("Giving up...\n");
         return -1;
-    }
+    }*/
     return bufSize;
 }
 
 ////////////////////////////////////////////////
 // LLREAD
 ////////////////////////////////////////////////
+int getInformationFrame(unsigned char *buf)
+{
+    unsigned char *tmp = malloc(MAX_BYTES);
+    int num_bytes = llread(tmp);
+    int size = 0;
+    unstuff(tmp, num_bytes, &size);
+    memcpy(buf, tmp, size);
+    return size;
+}
+
 int llread(unsigned char *packet)
 {
     next_step = DO_NOTHING;
-    packet = malloc(MAX_BYTES * sizeof(unsigned char));
-    unsigned int idx = 0;
+    state = START;
+    unsigned int idx = 0, numBytesRead = 0;
     unsigned char byte = 0;
     do
     {
-        if (read(fd, &byte, 1) == 0)
+        if (read(fd, &byte, 1) <= 0)
             break;
-        printf("%x\n", byte);
-        printf("State: %d\n", state);
-        printf("Connection state: %d\n", connection_state);
-        printf("-------------------\n");
+        numBytesRead++;
+        if (role == LlRx){
+            printf("byte: %x\nidx: %d\n-----------------------\n", byte, numBytesRead);
+        }
+            
         switch (state)
         {
         case START:
@@ -469,13 +481,15 @@ int llread(unsigned char *packet)
         case BCC_OK:
             if (byte == FLAG)
             {
+                printf("adding1\n");
                 if (idx == 0)
                     state = SUCCESS;
                 else if (packet[idx - 1] != ESCAPE)
                 {
-                    unsigned char *unstuffed_data = NULL;
-                    int size;
-                    unstuff(packet, idx - 1, unstuffed_data, &size);
+                    printf("adding2\n");
+                    unsigned char *unstuffed_data = malloc(MAX_BYTES);
+                    int size = 0;
+                    unstuffed_data = unstuff(packet, idx - 1, &size);
                     if (idx != 0 && packet[idx - 1] == bcc2(unstuffed_data, size))
                     {
                         idx--;
@@ -484,12 +498,14 @@ int llread(unsigned char *packet)
                 }
                 else
                 {
+                    printf("adding3\n");
                     packet[idx] = byte;
                     idx++;
                 }
             }
             else
             {
+                printf("adding4\n");
                 packet[idx] = byte;
                 idx++;
             }
@@ -497,10 +513,10 @@ int llread(unsigned char *packet)
         default:
             break;
         }
-
+    printf("state: %d\n", state);
     } while (state != SUCCESS);
-    printf("%d\n", state);
-    return 0;
+    printf("uuuuuuu\n");
+    return numBytesRead;
 }
 
 ////////////////////////////////////////////////
