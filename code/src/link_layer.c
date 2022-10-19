@@ -130,7 +130,8 @@ int llopen(LinkLayer connectionParameters)
     newtio.c_lflag = 0;
     if (connectionParameters.role == LlTx)
     {
-        newtio.c_cc[VTIME] = 40;
+        newtio.c_cc[VTIME] = 10;
+        printf("vtime: %d\n", newtio.c_cc[VTIME]);
         newtio.c_cc[VMIN] = 0;
     }
     else
@@ -154,6 +155,11 @@ int llopen(LinkLayer connectionParameters)
         (void)signal(SIGALRM, alarmHandler);
         if (makeConnection() == -1)
             return -1;
+        else
+        {
+            connection_state = DATA_TRANSFER;
+            printf("Logical connection established successfully!\n");
+        }
     }
     else
     {
@@ -246,7 +252,7 @@ int handleNextStep(const unsigned char *buf, int bufSize)
     case SEND_DATA_0:
         if (prev_step == SEND_DATA_0)
         {
-            res = sendInformationFrame(buf, bufSize);
+            res = llwrite(buf, bufSize);
         }
         else
         {
@@ -257,7 +263,7 @@ int handleNextStep(const unsigned char *buf, int bufSize)
     case SEND_DATA_1:
         if (prev_step == SEND_DATA_1)
         {
-            res = sendInformationFrame(buf, bufSize);
+            res = llwrite(buf, bufSize);
         }
         else
         {
@@ -271,8 +277,7 @@ int handleNextStep(const unsigned char *buf, int bufSize)
         break;
     case SEND_RR_1:
         unsigned char rr1[] = {FLAG, COMMAND_SENDER, RR_1, COMMAND_SENDER ^ RR_1, FLAG};
-        //res = llwrite(rr1, 5);
-        res = write(fd, rr1, 5);
+        res = llwrite(rr1, 5);
         break;
     case SEND_DISC:
         unsigned char disc[] = {FLAG, COMMAND_SENDER, DISC, COMMAND_SENDER ^ DISC, FLAG};
@@ -313,7 +318,8 @@ int sendInformationFrame(const unsigned char *buf, int bufsize)
     }
     frame[4 + stuffedSize] = bcc2(buf, bufsize);
     frame[4 + stuffedSize + 1] = FLAG;
-    return llwrite(frame, stuffedSize + 6);
+    next_step = (prev_step == SEND_DATA_0 ? SEND_DATA_1 : SEND_DATA_0);
+    return handleNextStep(frame, stuffedSize + 6);
 }
 
 void printBuffer(const unsigned char *buf, int bufsize)
@@ -327,53 +333,43 @@ void printBuffer(const unsigned char *buf, int bufsize)
 
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    unsigned char *answer = NULL;
     attempts = 0;
-    printf("SENDING1\n");
-    if (write(fd, buf, bufSize) < 0)
-    {
-        printf("fd: %d\n", fd);
-        printf("bufSize: %d\nbuf: ", bufSize);
-        printBuffer(buf, bufSize);
-        perror("Couldn't write to the serial port: ");
-        return -1;
-    }
     if (role == LlTx)
     {
-        printBuffer(buf, bufSize);
-        while (attempts < maxRepeat)
+        do
         {
-            printf("%d\n", attempts);
-            //alarm(timeout);
-            printf("timeout: %d\n", timeout);
-            attempts++;
-            if (alarmTriggered == TRUE)
+            alarm(timeout);
+            if (write(fd, buf, bufSize) != bufSize)
             {
-                printf("SENDING3\n");
-                if (write(fd, buf, bufSize) != bufSize)
-                {
-                    perror("Couldn't write to the serial port: ");
-                    continue;
-                }
+                printf("fd: %d\n", fd);
+                printf("bufSize: %d\nbuf: ", bufSize);
+                printBuffer(buf, bufSize);
+                perror("Couldn't write to the serial port: ");
+                continue;
             }
-            llread(answer);
-            handleNextStep(buf, bufSize);
-            if (state == SUCCESS)
+
+            if (llread(NULL) != -1)
             {
-                if (connection_state == ESTABLISHMENT)
-                {
-                    connection_state = DATA_TRANSFER;
-                    printf("Logical connection established successfully!\n");
-                }
-                printf("DEACTIVATE ALARM\n");
-                //alarm(0);
+                alarm(0);
+                handleNextStep(buf, bufSize);
                 return bufSize;
             }
-        }
-        printf("Giving up...\n");
-        return -1;
+            attempts++;
+        } while (attempts < maxRepeat);
     }
-    return bufSize;
+    else if (role == LlRx)
+    {
+        if (write(fd, buf, bufSize) < 0)
+        {
+            printf("fd: %d\n", fd);
+            printf("bufSize: %d\nbuf: ", bufSize);
+            printBuffer(buf, bufSize);
+            perror("Couldn't write to the serial port: ");
+            return -1;
+        }
+        return bufSize;
+    }
+    return -1;
 }
 
 ////////////////////////////////////////////////
@@ -388,28 +384,21 @@ int getInformationFrame(unsigned char *buf)
     return num_bytes;
 }
 
-int llread(unsigned char *packet)
+int trans_read()
 {
-    if (role == LlTx) {
-        return trans_read(packet);
-    }
-    if (role == LlRx) {
-        return rec_read(packet);
-    }
-    return -1;
-}
-
-int trans_read(unsigned char *packet) {
-    next_step = DO_NOTHING;
     state = START;
-    unsigned int idx = 0, numBytesRead = 0;
     unsigned char byte = 0;
+    unsigned char gotthis = 0;
     do
     {
+        printf("before read_tx\n");
         if (read(fd, &byte, 1) <= 0)
-            break;
-        numBytesRead++;
-        printf("byte_read: %x\n", byte);
+        {
+            printf("error\n");
+            return -1;
+        }
+        printf("after read\n");
+        printf("byte: %x\n", byte);
         switch (state)
         {
         case START:
@@ -427,46 +416,39 @@ int trans_read(unsigned char *packet) {
             {
                 state = START;
             }
-            else if (byte == COMMAND_RECEIVER && connection_state == TERMINATION)
-            {
-                state = A_RCV;
-                next_step = SEND_UA;
-            }
             break;
         case A_RCV:
-            if (role == LlTx && byte == UA)
+            if (byte == UA || byte == RR_0 || byte == RR_1 || byte == DISC || byte == REJ_0 || byte == REJ_1)
             {
                 state = C_RCV;
-                next_step = DO_NOTHING;
+                gotthis = byte;
+                switch (byte)
+                {
+                case UA:
+                    next_step = DO_NOTHING;
+                    break;
+                case RR_0:
+                    next_step = SEND_DATA_0;
+                    break;
+                case RR_1:
+                    next_step = SEND_DATA_1;
+                    break;
+                case DISC:
+                    next_step = SEND_UA;
+                    break;
+                case REJ_0:
+                    next_step = SEND_DATA_0;
+                    break;
+                case REJ_1:
+                    next_step = SEND_DATA_1;
+                    break;
+                default:
+                    break;
+                }
             }
             else if (byte == FLAG)
             {
                 state = FLAG_RCV;
-            }
-            else if (byte == DISC)
-            {
-                state = C_RCV;
-                next_step = SEND_UA;
-            }
-            else if (byte == RR_0)
-            {
-                next_step = SEND_DATA_0;
-                state = C_RCV;
-            }
-            else if (byte == RR_1)
-            {
-                next_step = SEND_DATA_1;
-                state = C_RCV;
-            }
-            else if (byte == REJ_0)
-            {
-                next_step = SEND_DATA_0;
-                state = C_RCV;
-            }
-            else if (byte == REJ_1)
-            {
-                next_step = SEND_DATA_1;
-                state = C_RCV;
             }
             else
             {
@@ -478,14 +460,9 @@ int trans_read(unsigned char *packet) {
             {
                 state = FLAG_RCV;
             }
-            else if ((COMMAND_SENDER ^ UA) == byte || (COMMAND_SENDER ^ SET) == byte || (COMMAND_SENDER ^ DISC) == byte || (COMMAND_SENDER ^ RR_0) == byte || (COMMAND_SENDER ^ RR_1) == byte || (COMMAND_SENDER ^ REJ_0) == byte || (COMMAND_SENDER ^ REJ_1) == byte || (COMMAND_SENDER ^ SD_0) == byte || (COMMAND_SENDER ^ SD_1) == byte)
+            else if ((COMMAND_SENDER ^ gotthis) == byte)
             {
                 state = BCC_OK;
-            }
-            else if (byte == (COMMAND_RECEIVER ^ DISC) && connection_state == TERMINATION)
-            {
-                state = BCC_OK;
-                next_step = SEND_UA;
             }
             else
             {
@@ -493,26 +470,38 @@ int trans_read(unsigned char *packet) {
             }
             break;
         case BCC_OK:
-            state = SUCCESS;
+            if (byte == FLAG)
+            {
+                state = SUCCESS;
+            }
+            else
+            {
+                state = START;
+            }
             break;
         default:
             break;
         }
     } while (state != SUCCESS);
-    return numBytesRead;
+    return 5;
 }
-
-int rec_read(unsigned char *packet) {
+int rec_read(unsigned char *packet)
+{
     next_step = DO_NOTHING;
     state = START;
     unsigned int idx = 0, numBytesRead = 0;
     unsigned char byte = 0;
+    unsigned char gotthis = 0;
     do
     {
+        printf("before read\n");
         if (read(fd, &byte, 1) <= 0)
-            break;
-        numBytesRead++;
-        printf("byte_read: %x\n", byte);
+        {
+            next_step = prev_step;
+            return -1;
+        }
+        printf("after read\n");
+        printf("byte: %x\n", byte);
         switch (state)
         {
         case START:
@@ -530,64 +519,35 @@ int rec_read(unsigned char *packet) {
             {
                 state = START;
             }
-            else if (byte == COMMAND_RECEIVER && role == LlTx && connection_state == TERMINATION)
-            {
-                state = A_RCV;
-                next_step = SEND_UA;
-            }
             break;
         case A_RCV:
-            if (role == LlTx && byte == UA)
+            if (byte == SET || byte == DISC || byte == SD_0 || byte == SD_1)
             {
                 state = C_RCV;
-                next_step = DO_NOTHING;
-            }
-            else if (role == LlRx && byte == SET)
-            {
-                state = C_RCV;
-                next_step = SEND_UA;
+                gotthis = byte;
+                switch (byte)
+                {
+                case SET:
+                    next_step = SEND_UA;
+                    break;
+                case DISC:
+                    next_step = SEND_DISC;
+                    break;
+                case SD_0:
+                    prev_step = SEND_RR_0;
+                    next_step = SEND_RR_1;
+                    break;
+                case SD_1:
+                    prev_step = SEND_RR_1;
+                    next_step = SEND_RR_0;
+                    break;
+                default:
+                    break;
+                }
             }
             else if (byte == FLAG)
             {
                 state = FLAG_RCV;
-            }
-            else if (byte == DISC)
-            {
-                state = C_RCV;
-                if (role == LlRx)
-                    next_step = SEND_DISC;
-                else
-                    next_step = SEND_UA;
-            }
-            else if (byte == RR_0)
-            {
-                next_step = SEND_DATA_0;
-                state = C_RCV;
-            }
-            else if (byte == RR_1)
-            {
-                next_step = SEND_DATA_1;
-                state = C_RCV;
-            }
-            else if (byte == REJ_0)
-            {
-                next_step = SEND_DATA_0;
-                state = C_RCV;
-            }
-            else if (byte == REJ_1)
-            {
-                next_step = SEND_DATA_1;
-                state = C_RCV;
-            }
-            else if (byte == SD_0)
-            {
-                next_step = SEND_RR_1;
-                state = C_RCV;
-            }
-            else if (byte == SD_1)
-            {
-                next_step = SEND_RR_0;
-                state = C_RCV;
             }
             else
             {
@@ -599,14 +559,9 @@ int rec_read(unsigned char *packet) {
             {
                 state = FLAG_RCV;
             }
-            else if ((COMMAND_SENDER ^ UA) == byte || (COMMAND_SENDER ^ SET) == byte || (COMMAND_SENDER ^ DISC) == byte || (COMMAND_SENDER ^ RR_0) == byte || (COMMAND_SENDER ^ RR_1) == byte || (COMMAND_SENDER ^ REJ_0) == byte || (COMMAND_SENDER ^ REJ_1) == byte || (COMMAND_SENDER ^ SD_0) == byte || (COMMAND_SENDER ^ SD_1) == byte)
+            else if ((COMMAND_SENDER ^ gotthis) == byte)
             {
                 state = BCC_OK;
-            }
-            else if (byte == (COMMAND_RECEIVER ^ DISC) && role == LlTx && connection_state == TERMINATION)
-            {
-                state = BCC_OK;
-                next_step = SEND_UA;
             }
             else
             {
@@ -654,6 +609,19 @@ int llclose(int showStatistics)
         buf[0] = UA;
         llwrite(buf, 1);
         return 1;
+    }
+    return -1;
+}
+
+int llread(unsigned char *packet)
+{
+    if (role == LlTx)
+    {
+        return trans_read();
+    }
+    if (role == LlRx)
+    {
+        return rec_read(packet);
     }
     return -1;
 }

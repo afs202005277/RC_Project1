@@ -34,17 +34,17 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             printf("Couldn't open logical connection!\n");
             exit(-1);
         }
-        int file = open(filename, O_RDONLY);
+        /*int file = open(filename, O_RDONLY);
         unsigned char buffer[MAX_PAYLOAD_SIZE];
         unsigned int read_bytes = read(file, buffer, MAX_PAYLOAD_SIZE);
-        sendInformationFrame(buffer, read_bytes);
+        sendInformationFrame(buffer, read_bytes);*/
         /*while ((read_bytes = read(file, buffer, MAX_PAYLOAD_SIZE)) > 0)
         {
             sendInformationFrame(buffer, read_bytes);
             break;
         }*/
-        close(file);
-        llclose(0);
+        //close(file);
+        //llclose(0);
     }
     else
     {
